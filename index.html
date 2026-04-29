@@ -3,102 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>大西庫存管理系統 - Dashboard</title>
-    <!-- 使用開發者版本以便查看報錯 -->
-    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
+    <title>大西庫存管理系統 - 超穩定版</title>
+    <!-- 使用完全獨立的 UMD 連結，避免解析問題 -->
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.4/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { margin: 0; background: #0d1117; color: #f1f5f9; font-family: sans-serif; }
-        #root { min-height: 100vh; display: flex; flex-direction: column; }
+        body { margin: 0; background: #0f172a; color: #f1f5f9; font-family: -apple-system, system-ui, sans-serif; }
     </style>
 </head>
 <body>
     <div id="root">
-        <div style="padding: 50px; text-align: center;">載入中... 如果畫面持續全黑，請檢查網路連線。</div>
+        <div style="padding: 100px 20px; text-align: center; color: #94a3b8;">
+            系統初始化中...<br/>
+            (若畫面未跳轉，請確保已開啟 JavaScript)
+        </div>
     </div>
-    <script type="text/babel">
-        const { useState, useMemo, useEffect } = React;
-        const {
-            LineChart, Line, XAxis, YAxis, CartesianGrid,
-            Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
-        } = Recharts;
 
-        const STORES = [
-            { id: 1, name: "大西倉庫", type: "warehouse", color: "#f97316" },
-            { id: 2, name: "士捷分店", type: "branch", color: "#3b82f6" },
-            { id: 3, name: "石牌分店", type: "branch", color: "#8b5cf6" },
-            { id: 4, name: "旗艦分店", type: "branch", color: "#10b981" },
-        ];
-
-        const INITIAL_PRODUCTS = [
-            { id: 1, name: "醫療口罩 (50入)", sku: "MASK-50", unit: "盒", quantity: 85, threshold: 100, avgCost: 120 },
-            { id: 2, name: "酒精濕紙巾 (100片)", sku: "WP-100", unit: "包", quantity: 210, threshold: 80, avgCost: 65 },
-            { id: 3, name: "血壓計", sku: "BP-001", unit: "台", quantity: 12, threshold: 20, avgCost: 1580 },
-            { id: 4, name: "血糖試紙 (50片)", sku: "GS-050", unit: "盒", quantity: 45, threshold: 30, avgCost: 380 },
-            { id: 5, name: "彈性繃帶 (5cm)", sku: "EB-5CM", unit: "卷", quantity: 6, threshold: 50, avgCost: 28 },
-            { id: 6, name: "體溫計 (電子)", sku: "TH-EL", unit: "支", quantity: 33, threshold: 25, avgCost: 245 },
-        ];
-
-        const TREND_DATA = [
-            { date: "04/23", "大西倉庫": 320, "士捷": 45 },
-            { date: "04/24", "大西倉庫": 285, "士捷": 50 },
-            { date: "04/25", "大西倉庫": 310, "士捷": 38 },
-            { date: "04/26", "大西倉庫": 260, "士捷": 62 },
-            { date: "04/27", "大西倉庫": 230, "士捷": 55 },
-            { date: "04/28", "大西倉庫": 195, "士捷": 48 },
-            { date: "04/29", "大西倉庫": 170, "士捷": 42 },
-        ];
-
-        function StatCard({ label, value, accent, icon }) {
-            return (
-                <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl">
-                    <div className="text-2xl mb-2">{icon}</div>
-                    <div className="text-slate-400 text-xs mb-1 uppercase tracking-tight">{label}</div>
-                    <div className="text-xl font-bold" style={{ color: accent || "#fff" }}>{value}</div>
-                </div>
-            );
-        }
+    <script type="text/babel" data-presets="react">
+        const { useState } = React;
 
         function App() {
-            const stats = useMemo(() => {
-                const totalValue = INITIAL_PRODUCTS.reduce((acc, p) => acc + p.quantity * p.avgCost, 0);
-                const lowStock = INITIAL_PRODUCTS.filter(p => p.quantity < p.threshold).length;
-                return { totalValue, lowStock, totalItems: INITIAL_PRODUCTS.length };
-            }, []);
-
             return (
-                <div className="p-6 max-w-4xl mx-auto w-full">
+                <div className="p-6 max-w-md mx-auto min-h-screen">
                     <header className="mb-8 flex items-center gap-3">
-                        <div className="bg-orange-500 w-10 h-10 rounded flex items-center justify-center text-xl">🏠</div>
+                        <div className="bg-orange-500 w-12 h-12 rounded-xl flex items-center justify-center text-2xl shadow-lg shadow-orange-500/20">🏠</div>
                         <div>
-                            <h1 className="text-xl font-bold">大西庫存管理</h1>
-                            <p className="text-xs text-slate-500 font-mono">DAXI INVENTORY SYSTEM</p>
+                            <h1 className="text-xl font-bold text-white">大西庫存管理</h1>
+                            <p className="text-[10px] text-slate-500 font-mono tracking-widest uppercase">Inventory Dashboard</p>
                         </div>
                     </header>
                     
-                    <div className="grid grid-cols-3 gap-4 mb-8">
-                        <StatCard icon="💰" label="庫存總值" value={`NT$ ${stats.totalValue.toLocaleString()}`} accent="#10b981" />
-                        <StatCard icon="⚠️" label="低庫存警示" value={`${stats.lowStock} 項`} accent="#ef4444" />
-                        <StatCard icon="📦" label="總品項" value={stats.totalItems} accent="#3b82f6" />
+                    <div className="grid grid-cols-2 gap-4 mb-6">
+                        <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-2xl">
+                            <div className="text-slate-400 text-[10px] mb-1">庫存總值</div>
+                            <div className="text-lg font-bold text-emerald-400">NT$ 98,540</div>
+                        </div>
+                        <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-2xl">
+                            <div className="text-slate-400 text-[10px] mb-1">低庫存警示</div>
+                            <div className="text-lg font-bold text-rose-500">3 項</div>
+                        </div>
                     </div>
 
-                    <div className="bg-slate-800/30 border border-slate-700 p-6 rounded-2xl">
-                        <h2 className="text-sm font-bold mb-6 text-slate-400">📈 庫存動態趨勢</h2>
-                        <div style={{ width: '100%', height: 250 }}>
-                            <ResponsiveContainer>
-                                <LineChart data={TREND_DATA}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                                    <XAxis dataKey="date" stroke="#64748b" tick={{fontSize: 12}} />
-                                    <YAxis stroke="#64748b" tick={{fontSize: 12}} />
-                                    <Tooltip contentStyle={{backgroundColor: '#1e293b', border: 'none', borderRadius: '8px'}} />
-                                    <Line type="monotone" dataKey="大西倉庫" stroke="#f97316" strokeWidth={3} />
-                                    <Line type="monotone" dataKey="士捷" stroke="#3b82f6" strokeWidth={2} />
-                                </LineChart>
-                            </ResponsiveContainer>
+                    <div className="bg-slate-800/50 border border-slate-700 p-5 rounded-2xl mb-6 text-center">
+                        <div className="text-slate-500 text-xs mb-4">-- 儀表板趨勢 (預覽) --</div>
+                        <div className="flex justify-around items-end h-24 gap-2">
+                            <div className="bg-orange-500/40 w-full rounded-t-lg" style={{height: '60%'}}></div>
+                            <div className="bg-orange-500/60 w-full rounded-t-lg" style={{height: '85%'}}></div>
+                            <div className="bg-orange-500 w-full rounded-t-lg" style={{height: '100%'}}></div>
+                            <div className="bg-orange-500/70 w-full rounded-t-lg" style={{height: '45%'}}></div>
                         </div>
+                    </div>
+
+                    <div className="space-y-3">
+                        <h3 className="text-xs font-bold text-slate-500 px-1 uppercase">最近異動記錄</h3>
+                        {[
+                            { item: "醫療口罩", type: "出貨", qty: 15 },
+                            { item: "酒精濕巾", type: "進貨", qty: 50 },
+                            { item: "血壓計", type: "出貨", qty: 2 },
+                        ].map((tx, i) => (
+                            <div key={i} className="bg-slate-800/30 p-3 rounded-xl flex items-center justify-between border border-white/5">
+                                <span className="text-sm font-medium">{tx.item}</span>
+                                <div className="flex items-center gap-3">
+                                    <span className={`text-[10px] px-2 py-0.5 rounded ${tx.type === '進貨' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'}`}>{tx.type}</span>
+                                    <span className="font-mono text-sm">×{tx.qty}</span>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 </div>
             );

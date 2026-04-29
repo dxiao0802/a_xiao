@@ -1,0 +1,309 @@
+/**
+
+- 大西庫存管理系統 — Node.js / Express 後端
+- ─────────────────────────────────────────
+- 目錄結構：
+- src/
+- ```
+  app.js              ← 本檔案 (entry point)
+  ```
+- ```
+  routes/
+  ```
+- ```
+    inventory.js      ← 庫存 CRUD
+  ```
+- ```
+    transactions.js   ← 異動流水帳
+  ```
+- ```
+    notifications.js  ← Discord Webhook
+  ```
+- ```
+  services/
+  ```
+- ```
+    discord.js        ← 通知模組（低庫存 + 每日摘要）
+  ```
+- ```
+  db/
+  ```
+- ```
+    pool.js           ← pg 連線池
+  ```
+- ```
+  jobs/
+  ```
+- ```
+    dailyDigest.js    ← node-cron 每日排程
+  ```
+
+*/
+
+// ─────────────────────────────────────────
+// app.js
+// ─────────────────────────────────────────
+const express = require(‘express’);
+const cors    = require(‘cors’);
+const cron    = require(‘node-cron’);
+
+const inventoryRouter     = require(’./routes/inventory’);
+const transactionsRouter  = require(’./routes/transactions’);
+const notificationsRouter = require(’./routes/notifications’);
+const { sendDailyDigest } = require(’./services/discord’);
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// ── Routes
+app.use(’/api/inventory’,     inventoryRouter);
+app.use(’/api/transactions’,  transactionsRouter);
+app.use(’/api/notifications’, notificationsRouter);
+
+// ── 每日 22:00 (台灣時間) 自動發送 Discord 摘要
+cron.schedule(‘0 22 * * *’, () => {
+console.log(’[CRON] 觸發每日庫存摘要…’);
+sendDailyDigest().catch(console.error);
+}, { timezone: ‘Asia/Taipei’ });
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+
+// ─────────────────────────────────────────
+// db/pool.js
+// ─────────────────────────────────────────
+/*
+const { Pool } = require(‘pg’);
+
+const pool = new Pool({
+host:     process.env.DB_HOST     || ‘localhost’,
+port:     process.env.DB_PORT     || 5432,
+database: process.env.DB_NAME     || ‘daxi_inventory’,
+user:     process.env.DB_USER     || ‘postgres’,
+password: process.env.DB_PASS     || ‘’,
+max: 10,                          // 最大連線數
+idleTimeoutMillis: 30000,
+});
+
+module.exports = pool;
+*/
+
+// ─────────────────────────────────────────
+// services/discord.js — 核心通知模組
+// ─────────────────────────────────────────
+/*
+const axios = require(‘axios’);
+const pool  = require(’../db/pool’);
+
+const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+
+// ── 低庫存即時警示
+// 在 transaction 寫入後呼叫
+async function checkAndAlertLowStock(productId) {
+const { rows } = await pool.query(`SELECT p.name, p.unit, p.avg_cost, p.threshold, SUM(i.quantity) AS total_qty, s.name AS supplier_name, s.phone AS supplier_phone FROM inventory i JOIN products  p ON p.id = i.product_id LEFT JOIN suppliers s ON s.id = p.supplier_id WHERE p.id = $1 GROUP BY p.name, p.unit, p.avg_cost, p.threshold, s.name, s.phone`, [productId]);
+
+```
+if (!rows.length) return;
+const p = rows[0];
+
+if (parseInt(p.total_qty) < p.threshold) {
+    const pct   = Math.round(parseInt(p.total_qty) / p.threshold * 100);
+    const color = pct < 50 ? 15158332 : 16776960; // red : yellow
+
+    await axios.post(WEBHOOK_URL, {
+        embeds: [{
+            title: `🚨 低庫存警示 — ${p.name}`,
+            color,
+            fields: [
+                { name: "剩餘數量",   value: `**${p.total_qty} ${p.unit}**`,          inline: true },
+                { name: "安全水位",   value: `${p.threshold} ${p.unit}`,              inline: true },
+                { name: "剩餘比例",   value: `${pct}%`,                                inline: true },
+                { name: "平均成本",   value: `NT$ ${parseFloat(p.avg_cost).toFixed(0)}`,  inline: true },
+                { name: "供應商",     value: p.supplier_name || '—',                  inline: true },
+                { name: "聯絡電話",   value: p.supplier_phone || '—',                 inline: true },
+            ],
+            footer:    { text: '大西庫存管理系統' },
+            timestamp: new Date().toISOString(),
+        }]
+    });
+
+    console.log(`[DISCORD] 低庫存警示已發送: ${p.name}`);
+}
+```
+
+}
+
+// ── 每日摘要 (Markdown 表格格式)
+async function sendDailyDigest() {
+const today = new Date().toISOString().split(‘T’)[0];
+
+```
+// 當日分店流向彙總
+const { rows: digest } = await pool.query(`
+    SELECT * FROM v_daily_digest WHERE txn_date = $1
+`, [today]);
+
+// 低庫存清單
+const { rows: lowStock } = await pool.query(`
+    SELECT * FROM v_inventory_summary
+    WHERE is_low_stock = TRUE
+    ORDER BY (quantity::float / threshold) ASC
+`);
+
+// 組合 Markdown 表格
+const tableHeader = '| 分店 | 品項 | 出貨量 | 剩餘庫存 |\n|------|------|--------|----------|';
+const tableRows = digest.map(r =>
+    `| ${r.location_name} | ${r.product_name} | ${r.total_out}${r.unit} | — |`
+).join('\n');
+
+const lowStockLines = lowStock.map(p =>
+    `- **${p.product_name}**: 剩 ${p.quantity}${p.unit} / 水位 ${p.threshold}${p.unit}` +
+    ` | ${p.supplier_name} ${p.supplier_phone}`
+).join('\n');
+
+const content = [
+    `📦 **大西庫存 Daily Digest** | ${today}`,
+    '',
+    tableHeader,
+    tableRows || '| — | 今日無出貨記錄 | — | — |',
+    '',
+    lowStock.length > 0
+        ? `⚠️ **低庫存警示 (${lowStock.length}項)**\n${lowStockLines}`
+        : '✅ 所有品項庫存正常',
+].join('\n');
+
+await axios.post(WEBHOOK_URL, { content });
+console.log('[DISCORD] 每日摘要已發送');
+```
+
+}
+
+module.exports = { checkAndAlertLowStock, sendDailyDigest };
+*/
+
+// ─────────────────────────────────────────
+// routes/transactions.js
+// ─────────────────────────────────────────
+/*
+const router = require(‘express’).Router();
+const pool   = require(’../db/pool’);
+const { checkAndAlertLowStock } = require(’../services/discord’);
+
+// POST /api/transactions — 新增異動（領貨/進貨）
+router.post(’/’, async (req, res) => {
+const { type, product_id, from_location, to_location,
+supplier_id, quantity, unit_price, operator, note } = req.body;
+
+```
+const client = await pool.connect();
+try {
+    await client.query('BEGIN');
+
+    // 1. 寫入異動記錄
+    const total_amount = unit_price ? quantity * unit_price : null;
+    await client.query(`
+        INSERT INTO transactions
+            (type, product_id, from_location, to_location,
+             supplier_id, quantity, unit_price, total_amount, operator, note)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    `, [type, product_id, from_location, to_location,
+        supplier_id, quantity, unit_price, total_amount, operator, note]);
+
+    // 2. 更新庫存快照
+    if (from_location) {
+        // 扣減來源
+        await client.query(`
+            INSERT INTO inventory (location_id, product_id, quantity)
+            VALUES ($1, $2, 0)
+            ON CONFLICT (location_id, product_id)
+            DO UPDATE SET quantity = inventory.quantity - $3, updated_at = NOW()
+        `, [from_location, product_id, quantity]);
+    }
+    if (to_location) {
+        // 增加目的地
+        await client.query(`
+            INSERT INTO inventory (location_id, product_id, quantity)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (location_id, product_id)
+            DO UPDATE SET quantity = inventory.quantity + $3, updated_at = NOW()
+        `, [to_location, product_id, quantity]);
+    }
+
+    await client.query('COMMIT');
+
+    // 3. 非同步檢查低庫存並推播 Discord
+    checkAndAlertLowStock(product_id).catch(console.error);
+
+    res.json({ success: true });
+} catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: err.message });
+} finally {
+    client.release();
+}
+```
+
+});
+
+// GET /api/transactions?limit=50
+router.get(’/’, async (req, res) => {
+const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+const { rows } = await pool.query(`SELECT t.*, p.name AS product_name, fl.name AS from_location_name, tl.name AS to_location_name FROM transactions t JOIN products  p  ON p.id = t.product_id LEFT JOIN locations fl ON fl.id = t.from_location LEFT JOIN locations tl ON tl.id = t.to_location ORDER BY t.created_at DESC LIMIT $1`, [limit]);
+res.json(rows);
+});
+
+module.exports = router;
+*/
+
+// ─────────────────────────────────────────
+// routes/inventory.js
+// ─────────────────────────────────────────
+/*
+const router = require(‘express’).Router();
+const pool   = require(’../db/pool’);
+
+// GET /api/inventory — 庫存彙總
+router.get(’/’, async (req, res) => {
+const { rows } = await pool.query(`SELECT * FROM v_inventory_summary ORDER BY is_low_stock DESC, product_name`);
+res.json(rows);
+});
+
+// GET /api/inventory/low-stock — 僅回傳低庫存品項
+router.get(’/low-stock’, async (req, res) => {
+const { rows } = await pool.query(`SELECT * FROM v_inventory_summary WHERE is_low_stock = TRUE`);
+res.json(rows);
+});
+
+// GET /api/inventory/trend?days=7 — 趨勢資料
+router.get(’/trend’, async (req, res) => {
+const days = parseInt(req.query.days) || 7;
+const { rows } = await pool.query(`SELECT DATE(created_at AT TIME ZONE 'Asia/Taipei') AS date, l.name AS location_name, SUM(quantity) AS total_moved FROM transactions t JOIN locations l ON l.id = COALESCE(t.from_location, t.to_location) WHERE created_at >= NOW() - INTERVAL '$1 days' GROUP BY 1, 2 ORDER BY 1`, [days]);
+res.json(rows);
+});
+
+module.exports = router;
+*/
+
+// ─────────────────────────────────────────
+// routes/notifications.js
+// ─────────────────────────────────────────
+/*
+const router = require(‘express’).Router();
+const { sendDailyDigest } = require(’../services/discord’);
+
+// POST /api/notifications/daily-digest — 手動觸發每日摘要
+router.post(’/daily-digest’, async (req, res) => {
+try {
+await sendDailyDigest();
+res.json({ success: true, message: ‘每日摘要已發送至 Discord’ });
+} catch (err) {
+res.status(500).json({ error: err.message });
+}
+});
+
+module.exports = router;
+*/
+
+module.exports = app;

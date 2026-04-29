@@ -1,0 +1,203 @@
+– ╔══════════════════════════════════════════════════════════╗
+– ║     大西庫存管理系統 — PostgreSQL Database Schema        ║
+– ║     Version: 1.0 | Designed for scalability             ║
+– ╚══════════════════════════════════════════════════════════╝
+
+– ─────────────────────────────────────────
+– 0. EXTENSIONS
+– ─────────────────────────────────────────
+CREATE EXTENSION IF NOT EXISTS “uuid-ossp”;
+
+– ─────────────────────────────────────────
+– 1. LOCATIONS (倉庫 / 分店節點)
+–    支援自主新增分店，type 區分中心/分支
+– ─────────────────────────────────────────
+CREATE TABLE locations (
+id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+name        VARCHAR(50)  NOT NULL,                   – e.g. ‘大西倉庫’, ‘士捷分店’
+type        VARCHAR(20)  NOT NULL                    – ‘warehouse’ | ‘branch’
+CHECK (type IN (‘warehouse’, ‘branch’)),
+address     TEXT,
+phone       VARCHAR(30),
+is_active   BOOLEAN      NOT NULL DEFAULT TRUE,      – 軟刪除支援
+created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+– 預設資料
+INSERT INTO locations (name, type, address, phone) VALUES
+(‘大西倉庫’, ‘warehouse’, ‘桃園市大溪區…’, ‘03-000-0001’),
+(‘士捷分店’, ‘branch’,    ‘台北市士林區…’, ‘02-000-0002’),
+(‘石牌分店’, ‘branch’,    ‘台北市北投區…’, ‘02-000-0003’),
+(‘旗艦分店’, ‘branch’,    ‘台北市信義區…’, ‘02-000-0004’);
+
+– ─────────────────────────────────────────
+– 2. SUPPLIERS (供應商)
+– ─────────────────────────────────────────
+CREATE TABLE suppliers (
+id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+name          VARCHAR(100) NOT NULL,
+contact_name  VARCHAR(50),
+phone         VARCHAR(30),
+email         VARCHAR(100),
+address       TEXT,
+is_active     BOOLEAN      NOT NULL DEFAULT TRUE,
+created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO suppliers (name, contact_name, phone) VALUES
+(‘台灣防護股份有限公司’, ‘王業務’, ‘02-2345-6789’),
+(‘清潔大師有限公司’,     ‘李經理’, ‘04-1234-5678’),
+(‘歐姆龍醫療’,           ‘陳代表’, ‘03-9876-5432’),
+(‘羅氏診斷’,             ‘林專員’, ‘02-8765-4321’),
+(‘精準醫療器材’,         ‘黃主任’, ‘06-5432-1098’);
+
+– ─────────────────────────────────────────
+– 3. PRODUCTS (商品主檔)
+–    avg_cost 使用加權平均成本法動態更新
+– ─────────────────────────────────────────
+CREATE TABLE products (
+id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+sku           VARCHAR(50)   UNIQUE NOT NULL,
+name          VARCHAR(100)  NOT NULL,
+unit          VARCHAR(20)   NOT NULL DEFAULT ‘個’,   – 盒, 包, 台, 卷…
+supplier_id   UUID          REFERENCES suppliers(id),
+avg_cost      NUMERIC(12,4) NOT NULL DEFAULT 0,      – 加權平均成本
+threshold     INTEGER       NOT NULL DEFAULT 50,     – 安全庫存水位
+description   TEXT,
+is_active     BOOLEAN       NOT NULL DEFAULT TRUE,
+created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+updated_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+– ─────────────────────────────────────────
+– 4. INVENTORY (各地點庫存快照)
+–    每個 location 對每個 product 維護一筆
+– ─────────────────────────────────────────
+CREATE TABLE inventory (
+id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+location_id  UUID          NOT NULL REFERENCES locations(id),
+product_id   UUID          NOT NULL REFERENCES products(id),
+quantity     INTEGER       NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+updated_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+UNIQUE (location_id, product_id)
+);
+
+– ─────────────────────────────────────────
+– 5. TRANSACTIONS (異動記錄 — 核心流水帳)
+–    記錄所有入庫、出庫、調撥
+– ─────────────────────────────────────────
+CREATE TYPE transaction_type AS ENUM (
+‘inbound’,      – 供應商進貨入中心倉庫
+‘outbound’,     – 分店領貨出中心倉庫
+‘transfer’,     – 地點間調撥
+‘adjustment’    – 盤點調整
+);
+
+CREATE TABLE transactions (
+id             UUID             PRIMARY KEY DEFAULT uuid_generate_v4(),
+type           transaction_type NOT NULL,
+product_id     UUID             NOT NULL REFERENCES products(id),
+from_location  UUID             REFERENCES locations(id),  – NULL = 外部供應商
+to_location    UUID             REFERENCES locations(id),  – NULL = 外部銷售
+supplier_id    UUID             REFERENCES suppliers(id),  – 進貨時填入
+quantity       INTEGER          NOT NULL CHECK (quantity > 0),
+unit_price     NUMERIC(12,4),   – 本次交易單價（進貨才有）
+total_amount   NUMERIC(14,4),   – = quantity * unit_price
+operator       VARCHAR(50),     – 操作人員姓名
+note           TEXT,
+created_at     TIMESTAMPTZ      NOT NULL DEFAULT NOW()
+);
+
+– ─────────────────────────────────────────
+– 6. INDEXES (查詢效能優化)
+– ─────────────────────────────────────────
+CREATE INDEX idx_transactions_product   ON transactions(product_id);
+CREATE INDEX idx_transactions_created   ON transactions(created_at DESC);
+CREATE INDEX idx_transactions_type      ON transactions(type);
+CREATE INDEX idx_inventory_location     ON inventory(location_id);
+CREATE INDEX idx_inventory_product      ON inventory(product_id);
+
+– ─────────────────────────────────────────
+– 7. TRIGGER: 自動更新 avg_cost (加權平均成本)
+–    僅在 inbound 時觸發
+– ─────────────────────────────────────────
+CREATE OR REPLACE FUNCTION update_avg_cost()
+RETURNS TRIGGER AS $$
+DECLARE
+current_qty   INTEGER;
+current_cost  NUMERIC(12,4);
+new_cost      NUMERIC(12,4);
+BEGIN
+– 只處理進貨且有單價的情況
+IF NEW.type = ‘inbound’ AND NEW.unit_price IS NOT NULL THEN
+SELECT COALESCE(SUM(quantity), 0), p.avg_cost
+INTO current_qty, current_cost
+FROM inventory i
+JOIN products p ON p.id = NEW.product_id
+WHERE i.product_id = NEW.product_id
+GROUP BY p.avg_cost
+LIMIT 1;
+
+```
+    -- 加權平均成本公式
+    new_cost := (current_qty * current_cost + NEW.quantity * NEW.unit_price)
+                / NULLIF(current_qty + NEW.quantity, 0);
+
+    UPDATE products SET avg_cost = new_cost, updated_at = NOW()
+    WHERE id = NEW.product_id;
+END IF;
+RETURN NEW;
+```
+
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_avg_cost
+AFTER INSERT ON transactions
+FOR EACH ROW EXECUTE FUNCTION update_avg_cost();
+
+– ─────────────────────────────────────────
+– 8. VIEW: 庫存彙總（供 Dashboard API 使用）
+– ─────────────────────────────────────────
+CREATE VIEW v_inventory_summary AS
+SELECT
+p.id            AS product_id,
+p.sku,
+p.name          AS product_name,
+p.unit,
+p.avg_cost,
+p.threshold,
+s.name          AS supplier_name,
+s.phone         AS supplier_phone,
+l.name          AS location_name,
+l.type          AS location_type,
+i.quantity,
+i.quantity * p.avg_cost AS stock_value,
+(i.quantity < p.threshold) AS is_low_stock
+FROM inventory i
+JOIN products  p ON p.id = i.product_id
+JOIN locations l ON l.id = i.location_id
+LEFT JOIN suppliers s ON s.id = p.supplier_id
+WHERE l.is_active = TRUE AND p.is_active = TRUE;
+
+– ─────────────────────────────────────────
+– 9. VIEW: 每日分店流向（供 Discord Daily Digest）
+– ─────────────────────────────────────────
+CREATE VIEW v_daily_digest AS
+SELECT
+DATE(t.created_at AT TIME ZONE ‘Asia/Taipei’) AS txn_date,
+l.name          AS location_name,
+p.name          AS product_name,
+p.unit,
+SUM(t.quantity) AS total_out,
+p.avg_cost,
+s.name          AS supplier_name,
+s.phone         AS supplier_phone
+FROM transactions t
+JOIN products  p ON p.id = t.product_id
+JOIN locations l ON l.id = t.to_location
+LEFT JOIN suppliers s ON s.id = p.supplier_id
+WHERE t.type = ‘outbound’
+GROUP BY 1, 2, 3, 4, p.avg_cost, 7, 8
+ORDER BY 1 DESC, 2, 3;
